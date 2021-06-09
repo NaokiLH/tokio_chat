@@ -12,6 +12,9 @@ async fn main() {
         tokio::spawn(accept_connection(stream, sender.clone()));
     }
 }
+extern "C" {
+    fn time(output: *mut i64) -> i64;
+}
 
 async fn accept_connection(
     stream: TcpStream,
@@ -21,6 +24,8 @@ async fn accept_connection(
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let mut receiver = sender.subscribe();
     let mut interval = tokio::time::interval(Duration::from_millis(1000));
+    const TIMEOUT: i64 = 15;
+    let mut last_pong_recv_timestamp: i64 = unsafe { time(std::ptr::null_mut()) };
 
     loop {
         tokio::select! {
@@ -46,6 +51,7 @@ async fn accept_connection(
                             ws_sender.send(Message::Pong(Vec::new())).await?;
                         }else if msg.is_pong(){
                             //TODO
+                            last_pong_recv_timestamp = unsafe { time(std::ptr::null_mut()) };
                         }
                         else if msg.is_close() {
                             break;
@@ -58,7 +64,11 @@ async fn accept_connection(
                 ws_sender.send(Message::Text(msg.message)).await?;
             }
             _ = interval.tick() => {
-                //ws_sender.send(Message::Text("tick".to_owned())).await?;
+                if unsafe{time(std::ptr::null_mut())} - last_pong_recv_timestamp > TIMEOUT {
+                    //资源回收,在各个聊天室内踢掉这个用户
+                    break;
+                }
+                ws_sender.send(Message::Ping(Vec::new())).await?;
             }
         }
     }
